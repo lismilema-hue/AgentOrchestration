@@ -1,5 +1,6 @@
 """Metrics collection and reporting."""
 
+import numbers
 import time
 from collections import defaultdict
 from typing import Dict, List
@@ -19,6 +20,8 @@ class MetricsCollector:
             self._counters[metric] += value
 
     def gauge(self, metric: str, value: float) -> None:
+        if not isinstance(value, numbers.Number):
+            raise TypeError(f"Gauge value must be numeric, got {type(value).__name__}")
         with self._lock:
             self._gauges[metric] = value
 
