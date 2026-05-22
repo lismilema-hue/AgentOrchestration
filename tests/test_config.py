@@ -32,6 +32,19 @@ class TestConfig:
         assert data["key1"] == "value1"
         assert data["key2"] == "value2"
 
+    def test_to_dict_defensive_copy(self):
+        """to_dict() must return a deep copy so mutations do not alter internal state."""
+        import copy
+        config = Config()
+        config.set("nested.key", "original")
+        data = config.to_dict()
+        # Mutate the returned dict
+        data["nested"]["key"] = "mutated"
+        data["new_key"] = "injected"
+        # Internal state must be unchanged
+        assert config.get("nested.key") == "original"
+        assert config.get("new_key") is None
+
 # 2019-02-01T18:58:35 update
 
 # 2019-07-31T13:45:15 update
