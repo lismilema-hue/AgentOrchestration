@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from pathlib import Path
 
 from src.common.config import Config
 from src.common.logging import configure_logging
@@ -16,6 +17,13 @@ def non_negative_int(value):
     if ivalue < 0:
         raise argparse.ArgumentTypeError(f"'{value}' is negative; tail must be zero or a positive integer")
     return ivalue
+
+
+def resolve_config_path(config_path: str | None) -> str | None:
+    """Expand user home (~) and resolve relative paths in a config path."""
+    if config_path is None:
+        return None
+    return str(Path(config_path).expanduser().resolve())
 
 
 def cli():
@@ -39,6 +47,9 @@ def cli():
     logs_parser.add_argument("--tail", "-t", type=non_negative_int, default=50, help="Number of lines (must be zero or positive)")
 
     args = parser.parse_args()
+
+    if args.config:
+        args.config = resolve_config_path(args.config)
 
     if args.verbose:
         configure_logging("DEBUG")
