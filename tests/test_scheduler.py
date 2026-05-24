@@ -1,21 +1,86 @@
 import pytest
-from src.orchestrator.scheduler import TaskScheduler
+from src.orchestrator.scheduler import TaskScheduler, QueuePayloadDecoder
+
+
+class TestQueuePayloadDecoder:
+    def test_validate_valid_minimal(self):
+        assert QueuePayloadDecoder.validate({"type": "test"})
+
+    def test_validate_valid_with_payload(self):
+        assert QueuePayloadDecoder.validate({"type": "test", "payload": {"data": 1}})
+
+    def test_validate_rejects_non_dict(self):
+        assert not QueuePayloadDecoder.validate("not a dict")
+        assert not QueuePayloadDecoder.validate(42)
+        assert not QueuePayloadDecoder.validate(None)
+        assert not QueuePayloadDecoder.validate([])
+
+    def test_validate_missing_type(self):
+        assert not QueuePayloadDecoder.validate({"payload": {}})
+
+    def test_validate_empty_type(self):
+        assert not QueuePayloadDecoder.validate({"type": ""})
+        assert not QueuePayloadDecoder.validate({"type": "   "})
+
+    def test_validate_non_dict_payload(self):
+        assert not QueuePayloadDecoder.validate({"type": "test", "payload": "string"})
+        assert not QueuePayloadDecoder.validate({"type": "test", "payload": 42})
+        assert not QueuePayloadDecoder.validate({"type": "test", "payload": [1, 2]})
+
+    def test_decode_valid(self):
+        result = QueuePayloadDecoder.decode({"type": "test", "payload": {}})
+        assert result == {"type": "test", "payload": {}}
+
+    def test_decode_invalid_returns_none(self):
+        assert QueuePayloadDecoder.decode("bad") is None
+        assert QueuePayloadDecoder.decode({"type": ""}) is None
+        assert QueuePayloadDecoder.decode(42) is None
 
 
 class TestTaskScheduler:
     def setup_method(self):
         self.scheduler = TaskScheduler()
 
-    def test_enqueue_task(self):
+    def test_enqueue_valid_task(self):
         task_id = self.scheduler.enqueue({"type": "test", "payload": {}})
         assert task_id is not None
 
-    def test_dequeue_task(self):
+    def test_enqueue_rejects_malformed(self):
+        task_id = self.scheduler.enqueue({"payload": {}})
+        assert task_id is None
+        # also verify nothing was added to any queue
+        import asyncio
+        task = asyncio.run(self.scheduler.dequeue())
+        assert task is None
+
+    def test_enqueue_rejects_non_dict(self):
+        task_id = self.scheduler.enqueue("string_payload")
+        assert task_id is None
+
+    def test_dequeue_valid_task(self):
         self.scheduler.enqueue({"type": "test", "payload": {"data": 1}})
         import asyncio
         task = asyncio.run(self.scheduler.dequeue())
         assert task is not None
         assert task["type"] == "test"
+        assert task["payload"] == {"data": 1}
+
+    def test_dequeue_skips_malformed_record(self):
+        """Legacy malformed records at head of queue are safely skipped."""
+        # Manually push a malformed item directly into the queue
+        # (bypass validation) to simulate a legacy record.
+        pq = self.scheduler._queues.setdefault("default", __import__(
+            "src.orchestrator.scheduler", fromlist=["PriorityQueue"]
+        ).PriorityQueue())
+        pq.push({"bad": "legacy record"})
+        # Now push a valid one behind it
+        self.scheduler.enqueue({"type": "valid", "payload": {}})
+
+        import asyncio
+        # The malformed record should be skipped, and the valid one returned.
+        task = asyncio.run(self.scheduler.dequeue())
+        assert task is not None
+        assert task["type"] == "valid"
 
     def test_enqueue_multiple_priorities(self):
         self.scheduler.enqueue({"type": "low"}, priority=1)
@@ -36,120 +101,62 @@ class TestTaskScheduler:
         task = asyncio.run(self.scheduler.dequeue())
         assert self.scheduler.fail(task["id"])
 
-# 2019-01-09T19:07:03 update
+    def test_complete_adds_to_claimed_idempotency(self):
+        self.scheduler.enqueue({"type": "test"})
+        import asyncio
+        task = asyncio.run(self.scheduler.dequeue())
+        self.scheduler.complete(task["id"])
+        # completing should have added the id to the claimed set
+        assert task["id"] in self.scheduler._claimed
 
-# 2019-02-18T12:30:02 update
+    def test_dequeue_skips_already_claimed(self):
+        """A task that was already claimed should not be dequeued again."""
+        # Enqueue, dequeue, and complete a task
+        task_id = self.scheduler.enqueue({"type": "test"})
+        import asyncio
+        task = asyncio.run(self.scheduler.dequeue())
+        assert task is not None
+        self.scheduler.complete(task["id"])
 
-# 2019-04-11T16:04:51 update
+        # Manually push the same task back into the queue (simulating a
+        # retry delivery of an already-processed message)
+        pq = self.scheduler._queues.setdefault("default", __import__(
+            "src.orchestrator.scheduler", fromlist=["PriorityQueue"]
+        ).PriorityQueue())
+        pq.push(task)
 
-# 2019-04-17T16:25:46 update
+        # Dequeue again — should skip the already-claimed task
+        result = asyncio.run(self.scheduler.dequeue())
+        assert result is None
 
-# 2019-05-24T19:32:13 update
+    def test_schedule_valid(self):
+        task_id = self.scheduler.schedule({"type": "future"}, delay=10)
+        assert task_id is not None
 
-# 2019-07-02T12:54:25 update
+    def test_schedule_rejects_malformed(self):
+        task_id = self.scheduler.schedule({"payload": {}}, delay=10)
+        assert task_id is None
 
-# 2019-07-03T20:37:00 update
+    def test_dequeue_empty_queue(self):
+        import asyncio
+        task = asyncio.run(self.scheduler.dequeue())
+        assert task is None
 
-# 2019-08-21T19:37:17 update
-
-# 2019-10-18T10:30:31 update
-
-# 2019-10-25T09:01:38 update
-
-# 2019-10-29T12:59:34 update
-
-# 2019-11-05T10:07:06 update
-
-# 2019-11-11T10:43:52 update
-
-# 2020-01-17T13:40:02 update
-
-# 2020-02-07T14:06:34 update
-
-# 2020-04-03T08:53:40 update
-
-# 2020-04-06T19:36:29 update
-
-# 2020-05-12T11:51:05 update
-
-# 2020-08-17T08:37:15 update
-
-# 2020-09-15T10:39:38 update
-
-# 2020-10-06T11:26:19 update
-
-# 2020-10-21T13:32:43 update
-
-# 2020-12-14T18:18:36 update
-
-# 2020-12-23T17:15:03 update
-
-# 2021-01-25T16:29:00 update
-
-# 2021-02-23T11:23:50 update
-
-# 2021-03-19T12:21:19 update
-
-# 2021-07-29T18:48:25 update
-
-# 2021-08-25T12:46:58 update
-
-# 2021-09-09T16:27:13 update
-
-# 2021-12-16T12:05:30 update
-
-# 2022-05-07T14:05:12 update
-
-# 2022-07-18T20:52:29 update
-
-# 2022-07-31T18:42:26 update
-
-# 2022-09-09T13:10:08 update
-
-# 2023-01-04T15:16:57 update
-
-# 2023-01-17T14:49:04 update
-
-# 2023-02-15T13:51:30 update
-
-# 2023-03-08T09:15:53 update
-
-# 2023-03-23T16:32:20 update
-
-# 2023-03-28T09:32:01 update
-
-# 2023-05-05T17:28:22 update
-
-# 2023-06-01T08:13:52 update
-
-# 2023-06-20T09:58:10 update
-
-# 2023-07-04T16:14:34 update
-
-# 2023-07-17T20:49:40 update
-
-# 2023-12-26T11:49:18 update
-
-# 2024-05-27T11:00:06 update
-
-# 2024-07-04T08:53:03 update
-
-# 2024-07-18T16:19:02 update
-
-# 2024-08-07T09:35:35 update
-
-# 2024-08-22T14:32:14 update
-
-# 2025-05-20T14:19:23 update
-
-# 2025-07-17T17:54:48 update
-
-# 2025-07-28T13:06:30 update
-
-# 2025-12-22T19:05:25 update
-
-# 2026-01-08T18:43:02 update
-
-# 2026-01-12T16:53:28 update
-
-# 2026-04-16T16:58:23 update
+    def test_fail_max_retries(self):
+        self.scheduler.enqueue({"type": "test"})
+        import asyncio
+        task = asyncio.run(self.scheduler.dequeue())
+        task_id = task["id"]
+        # fail once — task is re-enqueued with a new id
+        assert self.scheduler.fail(task_id, "default")
+        # dequeue the retried task
+        task2 = asyncio.run(self.scheduler.dequeue())
+        assert task2 is not None
+        assert task2["retries"] == 1
+        # fail again — second re-enqueue
+        assert self.scheduler.fail(task2["id"], "default")
+        task3 = asyncio.run(self.scheduler.dequeue())
+        assert task3 is not None
+        assert task3["retries"] == 2
+        # third fail crosses max_retries (3), retry is NOT enqueued
+        assert not self.scheduler.fail(task3["id"], "default")
