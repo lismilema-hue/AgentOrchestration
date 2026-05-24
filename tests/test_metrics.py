@@ -29,6 +29,21 @@ class TestMetricsCollector:
         assert snapshot["gauges"]["int_val"] == 42
         assert snapshot["gauges"]["float_val"] == 3.14
 
+    def test_gauge_rejects_non_finite(self):
+        import math
+        with pytest.raises(ValueError, match="Gauge value must be finite"):
+            self.metrics.gauge("test_nan", float("nan"))
+        with pytest.raises(ValueError, match="Gauge value must be finite"):
+            self.metrics.gauge("test_inf", float("inf"))
+        with pytest.raises(ValueError, match="Gauge value must be finite"):
+            self.metrics.gauge("test_neg_inf", float("-inf"))
+        # Finite values should still work
+        self.metrics.gauge("finite_val", 0.0)
+        self.metrics.gauge("finite_val_2", -1.5)
+        snapshot = self.metrics.snapshot()
+        assert snapshot["gauges"]["finite_val"] == 0.0
+        assert snapshot["gauges"]["finite_val_2"] == -1.5
+
     def test_observe(self):
         self.metrics.observe("response.time", 0.5)
         self.metrics.observe("response.time", 1.5)
