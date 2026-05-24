@@ -5,6 +5,7 @@ import sys
 
 from src.common.config import Config
 from src.common.logging import configure_logging
+from src.deploy.manager import deploy_agent
 
 
 def non_negative_int(value):
@@ -16,6 +17,35 @@ def non_negative_int(value):
     if ivalue < 0:
         raise argparse.ArgumentTypeError(f"'{value}' is negative; tail must be zero or a positive integer")
     return ivalue
+
+
+def handle_init(args) -> int:
+    """Initialize a new project. Returns exit code 0 on success."""
+    print(f"Initializing project: {args.name}")
+    return 0
+
+
+def handle_deploy(args) -> int:
+    """Deploy an agent from a manifest file. Returns 0 on success, 1 on failure."""
+    print(f"Deploying agent from manifest: {args.manifest}")
+    if deploy_agent(args.manifest):
+        print("Deploy succeeded.")
+        return 0
+    else:
+        print("Deploy failed: backend unreachable or manifest not found.", file=sys.stderr)
+        return 1
+
+
+def handle_status(args) -> int:
+    """Show agent status. Returns exit code 0."""
+    print("Checking agent status...")
+    return 0
+
+
+def handle_logs(args) -> int:
+    """View agent logs. Returns exit code 0."""
+    print(f"Fetching logs for agent: {args.agent_id}")
+    return 0
 
 
 def cli():
@@ -45,14 +75,17 @@ def cli():
     else:
         configure_logging("INFO")
 
-    if args.command == "init":
-        print(f"Initializing project: {args.name}")
-    elif args.command == "deploy":
-        print(f"Deploying agent from manifest: {args.manifest}")
-    elif args.command == "status":
-        print("Checking agent status...")
-    elif args.command == "logs":
-        print(f"Fetching logs for agent: {args.agent_id}")
+    handler_map = {
+        "init": handle_init,
+        "deploy": handle_deploy,
+        "status": handle_status,
+        "logs": handle_logs,
+    }
+
+    handler = handler_map.get(args.command)
+    if handler is not None:
+        exit_code = handler(args)
+        sys.exit(exit_code)
     else:
         parser.print_help()
         sys.exit(1)
