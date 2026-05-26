@@ -1,37 +1,102 @@
 """Metrics collection and reporting."""
 
 import numbers
+import re
 import time
 from collections import defaultdict
-from typing import Dict, List
-from threading import Lock
+from typing import Dict, List, Optional, Callable
+from threading import RLock
+
+
+# Default valid metric name pattern: alphanumeric, underscores, dots, and hyphens.
+_DEFAULT_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.\-]*$")
+
+
+class MetricNamePolicy:
+    """Defines rules for valid metric names and optional sanitization."""
+
+    def __init__(
+        self,
+        pattern: re.Pattern = _DEFAULT_NAME_PATTERN,
+        sanitizer: Optional[Callable[[str], str]] = None,
+    ):
+        self._pattern = pattern
+        self._sanitizer = sanitizer
+
+    def validate(self, name: str) -> None:
+        """Raise ValueError if the metric name does not conform to the policy."""
+        if not self._pattern.match(name):
+            raise ValueError(
+                f"Metric name {name!r} does not match allowed pattern "
+                f"{self._pattern.pattern!r}"
+            )
+
+    def sanitize(self, name: str) -> str:
+        """Return a sanitized version of the metric name, or the original if valid."""
+        if self._sanitizer:
+            return self._sanitizer(name)
+        self.validate(name)
+        return name
+
+
+def _default_sanitizer(name: str) -> str:
+    """Replace invalid characters with underscores; ensure a valid start."""
+    if not name:
+        return "_metric"
+    sanitized = re.sub(r"[^a-zA-Z0-9_.\-]", "_", name)
+    # Ensure it starts with a letter or underscore
+    if not re.match(r"[a-zA-Z_]", sanitized[0]):
+        sanitized = "_" + sanitized
+    # If after sanitization the name is empty or purely underscores, use default
+    stripped = sanitized.replace("_", "")
+    if not stripped:
+        return "_metric"
+    return sanitized
 
 
 class MetricsCollector:
-    def __init__(self):
-        self._lock = Lock()
+    def __init__(self, name_policy: Optional[MetricNamePolicy] = None):
+        self._lock = RLock()
         self._counters: Dict[str, int] = defaultdict(int)
         self._gauges: Dict[str, float] = {}
         self._histograms: Dict[str, List[float]] = defaultdict(list)
         self._timers: Dict[str, float] = {}
+        # Default policy: strict validation by default.
+        self._name_policy = name_policy or MetricNamePolicy()
+
+    @property
+    def name_policy(self) -> MetricNamePolicy:
+        return self._name_policy
+
+    @name_policy.setter
+    def name_policy(self, policy: MetricNamePolicy) -> None:
+        self._name_policy = policy
+
+    def _sanitize(self, metric: str) -> str:
+        """Apply the name policy and return the (possibly sanitized) name."""
+        return self._name_policy.sanitize(metric)
 
     def increment(self, metric: str, value: int = 1) -> None:
+        name = self._sanitize(metric)
         with self._lock:
-            self._counters[metric] += value
+            self._counters[name] += value
 
     def gauge(self, metric: str, value: float) -> None:
         if not isinstance(value, numbers.Number):
             raise TypeError(f"Gauge value must be numeric, got {type(value).__name__}")
+        name = self._sanitize(metric)
         with self._lock:
-            self._gauges[metric] = value
+            self._gauges[name] = value
 
     def observe(self, metric: str, value: float) -> None:
+        name = self._sanitize(metric)
         with self._lock:
-            self._histograms[metric].append(value)
+            self._histograms[name].append(value)
 
     def start_timer(self, metric: str) -> None:
+        name = self._sanitize(metric)
         with self._lock:
-            self._timers[metric] = time.time()
+            self._timers[name] = time.time()
 
     def stop_timer(self, metric: str) -> float:
         with self._lock:

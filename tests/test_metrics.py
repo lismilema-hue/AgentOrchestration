@@ -1,5 +1,5 @@
 import pytest
-from src.common.metrics import MetricsCollector
+from src.common.metrics import MetricsCollector, MetricNamePolicy, _default_sanitizer
 
 
 class TestMetricsCollector:
@@ -43,108 +43,87 @@ class TestMetricsCollector:
         duration = self.metrics.stop_timer("operation")
         assert duration > 0.005
 
-# 2019-07-16T09:29:21 update
+    # --- Metric name sanitization tests ---
 
-# 2019-09-09T13:35:42 update
+    def test_valid_metric_names_accepted(self):
+        """Valid names should pass through without error."""
+        for name in ["requests.total", "memory_usage", "cpu-usage", "a", "_private"]:
+            self.metrics.increment(name)
+        snapshot = self.metrics.snapshot()
+        for name in ["requests.total", "memory_usage", "cpu-usage", "a", "_private"]:
+            assert name in snapshot["counters"], f"{name!r} should be in counters"
 
-# 2019-09-27T12:32:57 update
+    def test_invalid_metric_names_rejected_with_strict_policy(self):
+        """With strict validation, invalid names raise ValueError."""
+        for bad_name in [
+            "123starts_with_digit",
+            "has spaces",
+            "has/slash",
+            "has@symbol",
+            "",
+        ]:
+            with pytest.raises(ValueError, match="Metric name.*does not match"):
+                self.metrics.increment(bad_name)
 
-# 2019-10-31T18:15:44 update
+    def test_sanitizer_replaces_invalid_chars(self):
+        """With a sanitizer policy, invalid characters are replaced."""
+        policy = MetricNamePolicy(sanitizer=_default_sanitizer)
+        collector = MetricsCollector(name_policy=policy)
 
-# 2019-12-03T08:48:09 update
+        collector.increment("staging.requests.total")
+        collector.gauge("prod/memory/usage", 75.0)
+        collector.observe("response time (ms)", 0.5)
+        collector.increment("123bad")
 
-# 2019-12-12T14:59:28 update
+        snapshot = collector.snapshot()
+        assert "staging.requests.total" in snapshot["counters"]
+        assert "prod_memory_usage" in snapshot["gauges"]
+        assert "response_time__ms_" in snapshot["histograms"]
+        assert "_123bad" in snapshot["counters"]
 
-# 2019-12-17T08:03:25 update
+    def test_sanitizer_blocks_env_identifiers(self):
+        """Custom sanitizer can strip environment identifiers from metric names."""
+        def strip_env(name: str) -> str:
+            import re
+            # Remove common environment identifiers like env-*, staging.*, prod-
+            name = re.sub(r"^(env-|staging[._-]|prod[._-]|dev[._-])", "", name)
+            # Then sanitize any remaining invalid chars
+            return _default_sanitizer(name)
 
-# 2020-03-13T11:30:29 update
+        policy = MetricNamePolicy(sanitizer=strip_env)
+        collector = MetricsCollector(name_policy=policy)
 
-# 2020-03-18T08:01:30 update
+        collector.increment("staging.requests.total")
+        collector.increment("prod-memory.usage")
+        collector.increment("env-queue.size")
+        collector.increment("dev.api.calls")
 
-# 2020-04-15T20:08:39 update
+        snapshot = collector.snapshot()
+        # Sanitized names should not retain environment prefixes
+        assert "staging.requests.total" not in snapshot["counters"]
+        assert "requests.total" in snapshot["counters"]
+        assert "memory.usage" in snapshot["counters"]
+        assert "queue.size" in snapshot["counters"]
+        assert "api.calls" in snapshot["counters"]
 
-# 2020-04-15T17:28:05 update
+    def test_default_sanitizer_edge_cases(self):
+        """Test _default_sanitizer on edge-case inputs."""
+        assert _default_sanitizer("valid_name") == "valid_name"
+        assert _default_sanitizer("") == "_metric"
+        assert _default_sanitizer("!!!") == "_metric"
+        assert _default_sanitizer("123abc") == "_123abc"
+        assert _default_sanitizer("a.b-c_d") == "a.b-c_d"
+        assert _default_sanitizer(" space ") == "_space_"
 
-# 2020-10-05T20:20:34 update
+    def test_name_policy_swappable(self):
+        """The name_policy property should be swappable at runtime."""
+        collector = MetricsCollector()
+        with pytest.raises(ValueError, match="Metric name"):
+            collector.increment("has space")
 
-# 2020-10-20T13:35:37 update
-
-# 2020-11-13T10:55:30 update
-
-# 2021-05-30T18:22:53 update
-
-# 2021-06-10T12:21:04 update
-
-# 2021-07-30T14:21:13 update
-
-# 2021-10-12T09:49:50 update
-
-# 2021-10-14T18:38:30 update
-
-# 2021-11-04T15:10:57 update
-
-# 2021-11-11T12:24:53 update
-
-# 2022-02-01T18:07:05 update
-
-# 2022-05-07T10:41:46 update
-
-# 2022-08-03T13:03:09 update
-
-# 2022-11-03T20:27:13 update
-
-# 2023-05-27T10:00:06 update
-
-# 2023-06-01T10:14:25 update
-
-# 2023-06-06T19:51:40 update
-
-# 2023-06-12T16:26:47 update
-
-# 2023-07-17T17:02:24 update
-
-# 2023-08-14T20:12:12 update
-
-# 2023-10-04T09:11:52 update
-
-# 2023-11-30T11:55:21 update
-
-# 2023-12-07T16:49:07 update
-
-# 2024-03-20T17:08:53 update
-
-# 2024-07-21T20:27:36 update
-
-# 2024-09-10T09:59:33 update
-
-# 2024-09-17T18:56:50 update
-
-# 2024-10-21T20:05:15 update
-
-# 2024-10-28T15:35:37 update
-
-# 2024-12-27T12:41:28 update
-
-# 2025-04-04T20:26:10 update
-
-# 2025-04-18T10:04:49 update
-
-# 2025-05-07T18:10:13 update
-
-# 2025-07-17T09:36:24 update
-
-# 2025-09-10T15:28:48 update
-
-# 2025-09-16T09:18:42 update
-
-# 2025-12-03T18:09:40 update
-
-# 2026-01-12T13:23:49 update
-
-# 2026-02-17T11:42:41 update
-
-# 2026-02-20T19:39:10 update
-
-# 2026-03-24T19:28:19 update
-
-# 2026-04-10T18:10:10 update
+        policy = MetricNamePolicy(sanitizer=_default_sanitizer)
+        collector.name_policy = policy
+        collector.increment("has space")
+        snapshot = collector.snapshot()
+        assert "has space" not in snapshot["counters"]
+        assert "has_space" in snapshot["counters"]
