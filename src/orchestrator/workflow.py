@@ -4,6 +4,43 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
+# States in which a workflow may have its human step approved.
+_APPROVABLE_STATES = {"pending", "running"}
+# States that should be rejected when approving a human step.
+_NON_APPROVABLE_STATES = {"completed", "failed", "skipped"}
+
+
+class WorkflowStateError(Exception):
+    """Raised when an operation is attempted in an invalid workflow state."""
+
+    def __init__(self, workflow_id: str, current_state: str, message: str = ""):
+        self.workflow_id = workflow_id
+        self.current_state = current_state
+        self.message = message or (
+            f"Cannot approve human step for workflow {workflow_id} "
+            f"in state '{current_state}'"
+        )
+        super().__init__(self.message)
+
+
+def check_approval_state(workflow: "Workflow") -> None:
+    """Validate that the workflow is in an approvable state.
+
+    This is the shared guard function — called before any approval
+    mutation to ensure the workflow run state allows human-step approval.
+
+    Raises:
+        WorkflowStateError: If the workflow is in a terminal or non-approvable
+                            state (completed, failed, skipped, stopped).
+    """
+    current = workflow.status.value if isinstance(workflow.status, StepStatus) else str(workflow.status)
+
+    if current in _NON_APPROVABLE_STATES:
+        raise WorkflowStateError(workflow.id, current)
+    if current not in _APPROVABLE_STATES and current not in _NON_APPROVABLE_STATES:
+        # Unknown / unexpected state — treat as not approvable.
+        raise WorkflowStateError(workflow.id, current)
+
 
 class StepStatus(Enum):
     PENDING = "pending"
@@ -60,6 +97,32 @@ class WorkflowManager:
 
     def delete_workflow(self, workflow_id: str) -> bool:
         return self._workflows.pop(workflow_id, None) is not None
+
+    def approve_human_step(self, workflow_id: str) -> bool:
+        """Approve a human step in the given workflow.
+
+        The shared guard (check_approval_state) is called before any
+        mutation, ensuring the workflow run state allows approval.
+
+        Returns True on success.
+        Raises ValueError if the workflow does not exist.
+        Raises WorkflowStateError if the workflow is in a non-approvable state.
+        """
+        workflow = self._workflows.get(workflow_id)
+        if not workflow:
+            raise ValueError(f"Workflow {workflow_id} not found")
+
+        # Shared guard — validates run state before approving.
+        check_approval_state(workflow)
+
+        # Mark the first pending step as completed (the "human approval" step).
+        for step in workflow.steps:
+            if step.status == StepStatus.PENDING:
+                step.status = StepStatus.COMPLETED
+                return True
+
+        # No pending step to approve — nothing to do, still valid.
+        return True
 
     def execute_workflow(self, workflow_id: str) -> bool:
         workflow = self._workflows.get(workflow_id)

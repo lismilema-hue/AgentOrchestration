@@ -4,9 +4,11 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Dict, Optional
 
 from src.agent import AgentRegistry, AgentStatus
+from src.orchestrator.workflow import WorkflowManager, WorkflowStateError
 
 router = APIRouter()
 registry = AgentRegistry()
+workflow_manager = WorkflowManager()
 
 
 @router.get("/agents")
@@ -53,6 +55,32 @@ async def stop_agent(agent_id: str):
 @router.get("/agents/count")
 async def agent_count():
     return {"count": registry.count()}
+
+
+@router.post("/workflows/{workflow_id}/approve-step")
+async def approve_human_step(workflow_id: str):
+    """Approve a human step in a workflow.
+
+    The shared run-state guard (check_approval_state) validates that the
+    workflow is in an approvable state before performing any mutation.
+
+    Returns 200 with step details on success.
+    Returns 404 if the workflow does not exist.
+    Returns 409 if the workflow is in a terminal or non-approvable state.
+    """
+    try:
+        result = workflow_manager.approve_human_step(workflow_id)
+        return {
+            "status": "approved",
+            "workflow_id": workflow_id,
+        }
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    except WorkflowStateError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=str(e),
+        )
 
 # 2019-03-18T11:10:18 update
 
